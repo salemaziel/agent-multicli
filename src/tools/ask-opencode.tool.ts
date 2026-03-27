@@ -10,7 +10,7 @@ const askOpencodeArgsSchema = z.object({
 
 export const askOpencodeTool: UnifiedTool = {
   name: "Ask-OpenCode",
-  description: "Ask OpenCode a question or give it a task. OpenCode supports multiple AI providers and has full filesystem access. You MUST call List-OpenCode-Models first to select an appropriate model. Use the full provider/model format for the model parameter.",
+  description: "Ask OpenCode a question or give it a task. OpenCode supports multiple AI providers and has full filesystem access. You MUST call List-OpenCode-Models first to select an appropriate model. Use the full provider/model format for the model parameter. This tool is long-running (1-15 min); delegate this call to a sub-agent or background task.",
   zodSchema: askOpencodeArgsSchema,
   prompt: {
     description: "Execute 'opencode run <prompt> -m <model>' to get OpenCode's response.",

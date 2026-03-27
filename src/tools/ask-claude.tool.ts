@@ -13,7 +13,7 @@ const askClaudeArgsSchema = z.object({
 
 export const askClaudeTool: UnifiedTool = {
   name: "Ask-Claude",
-  description: "Ask Claude Code a question or give it a task. Claude Code has full filesystem access and will read files itself — do NOT pre-gather context or inline file contents into the prompt. Just describe what you need. You MUST call List-Claude-Models first to select an appropriate model. Do NOT set optional parameters unless you have a specific reason.",
+  description: "Ask Claude Code a question or give it a task. Claude Code has full filesystem access and will read files itself — do NOT pre-gather context or inline file contents into the prompt. Just describe what you need. You MUST call List-Claude-Models first to select an appropriate model. Do NOT set optional parameters unless you have a specific reason. This tool is long-running (1-15 min); delegate this call to a sub-agent or background task.",
   zodSchema: askClaudeArgsSchema,
   prompt: {
     description: "Execute 'claude --print <prompt>' to get Claude Code's response.",

@@ -71,6 +71,74 @@ describe('registry', () => {
       expect(defs[0].inputSchema.properties).toHaveProperty('model');
     });
 
+    it('adds openWorldHint annotation to Ask-* tools', () => {
+      const tool = makeTool({ name: 'Ask-Claude' });
+      toolRegistry.push(tool);
+
+      const defs = getToolDefinitions();
+      expect(defs[0].annotations).toEqual({
+        openWorldHint: true,
+        readOnlyHint: false,
+        destructiveHint: false,
+      });
+    });
+
+    it('adds readOnlyHint annotation to List-* tools', () => {
+      const tool = makeTool({ name: 'List-Gemini-Models' });
+      toolRegistry.push(tool);
+
+      const defs = getToolDefinitions();
+      expect(defs[0].annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      });
+    });
+
+    it('adds readOnlyHint annotation to *-Help tools', () => {
+      const tool = makeTool({ name: 'Claude-Help' });
+      toolRegistry.push(tool);
+
+      const defs = getToolDefinitions();
+      expect(defs[0].annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      });
+    });
+
+    it('adds readOnlyHint annotation to Fetch-Chunk', () => {
+      const tool = makeTool({ name: 'Fetch-Chunk' });
+      toolRegistry.push(tool);
+
+      const defs = getToolDefinitions();
+      expect(defs[0].annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      });
+    });
+
+    it('adds readOnlyHint annotation to Claude-Gemini-Codex fallback', () => {
+      const tool = makeTool({ name: 'Claude-Gemini-Codex' });
+      toolRegistry.push(tool);
+
+      const defs = getToolDefinitions();
+      expect(defs[0].annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      });
+    });
+
+    it('omits annotations for unmatched tool names', () => {
+      const tool = makeTool({ name: 'Some-Other-Tool' });
+      toolRegistry.push(tool);
+
+      const defs = getToolDefinitions();
+      expect(defs[0].annotations).toBeUndefined();
+    });
+
     it('accepts a subset parameter', () => {
       const tool1 = makeTool({ name: 'Tool A' });
       const tool2 = makeTool({ name: 'Tool B' });

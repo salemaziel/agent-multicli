@@ -17,7 +17,7 @@ const askGeminiArgsSchema = z.object({
 
 export const askGeminiTool: UnifiedTool = {
   name: "Ask-Gemini",
-  description: "Ask Google Gemini a question or give it a task. Gemini has filesystem access via @ syntax — do NOT pre-gather context or inline file contents into the prompt. Just describe what you need and use @file references. You MUST call List-Gemini-Models first to select an appropriate model. Do NOT set optional parameters unless you have a specific reason.",
+  description: "Ask Google Gemini a question or give it a task. Gemini has filesystem access via @ syntax — do NOT pre-gather context or inline file contents into the prompt. Just describe what you need and use @file references. You MUST call List-Gemini-Models first to select an appropriate model. Do NOT set optional parameters unless you have a specific reason. This tool is long-running (1-15 min); delegate this call to a sub-agent or background task.",
   zodSchema: askGeminiArgsSchema,
   prompt: {
     description: "Execute 'gemini <prompt>' to get Gemini AI's response. Supports enhanced change mode for structured edit suggestions.",
