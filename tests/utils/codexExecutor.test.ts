@@ -56,12 +56,12 @@ describe('codexExecutor', () => {
 
   it('passes onProgress callback through', async () => {
     const onProgress = vi.fn();
-    await executeCodexCLI('task', 'gpt-5.2-codex', undefined, undefined, onProgress);
+    await executeCodexCLI('task', 'gpt-5.2-codex', undefined, undefined, { onProgress });
 
     expect(executeCommand).toHaveBeenCalledWith(
       'codex',
       expect.any(Array),
-      onProgress
+      { onProgress }
     );
   });
 });

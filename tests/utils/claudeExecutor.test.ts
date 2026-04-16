@@ -53,12 +53,12 @@ describe('claudeExecutor', () => {
 
   it('passes onProgress callback through', async () => {
     const onProgress = vi.fn();
-    await executeClaudeCLI('task', 'claude-sonnet-4-6', undefined, undefined, undefined, onProgress);
+    await executeClaudeCLI('task', 'claude-sonnet-4-6', undefined, undefined, undefined, { onProgress });
 
     expect(executeCommand).toHaveBeenCalledWith(
       'claude',
       expect.any(Array),
-      onProgress
+      { onProgress }
     );
   });
 });

@@ -19,7 +19,9 @@ export const askClaudeTool: UnifiedTool = {
     description: "Execute 'claude --print <prompt>' to get Claude Code's response.",
   },
   category: 'claude',
-  execute: async (args, onProgress) => {
+  execution: { taskSupport: 'optional' },
+  timeoutClass: 'ask',
+  execute: async (args, context) => {
     const { prompt, model, permissionMode, maxBudgetUsd, systemPrompt } = args;
 
     if (!prompt?.trim()) {
@@ -32,7 +34,7 @@ export const askClaudeTool: UnifiedTool = {
       permissionMode as string | undefined,
       maxBudgetUsd as number | undefined,
       systemPrompt as string | undefined,
-      onProgress
+      context
     );
 
     return `${STATUS_MESSAGES.CLAUDE_RESPONSE}\n${result}`;

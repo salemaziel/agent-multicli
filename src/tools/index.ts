@@ -10,13 +10,15 @@ import { askCodexTool } from './ask-codex.tool.js';
 import { askClaudeTool } from './ask-claude.tool.js';
 import { askOpencodeTool } from './ask-opencode.tool.js';
 import { detectAvailableClis, CliAvailability } from '../utils/cliDetector.js';
+import { MultiCliConfig } from '../config.js';
 
 /**
  * Initialize the tool registry based on which CLIs are available.
  * Must be called (and awaited) before the server starts accepting requests.
  */
-export async function initTools(): Promise<CliAvailability> {
-  const availability = await detectAvailableClis();
+export async function initTools(config?: Pick<MultiCliConfig, 'cliDetectTimeoutMs'>): Promise<CliAvailability> {
+  toolRegistry.length = 0;
+  const availability = await detectAvailableClis(config?.cliDetectTimeoutMs);
 
   if (availability.gemini) {
     toolRegistry.push(

@@ -10,6 +10,7 @@ import { executeCommand, sanitizeArgForCmd } from '../../src/utils/commandExecut
 
 function createMockProcess() {
   const proc = {
+    pid: 123,
     stdout: new EventEmitter(),
     stderr: new EventEmitter(),
     on: vi.fn(),
@@ -91,8 +92,10 @@ describe('commandExecutor', () => {
     vi.mocked(spawn).mockReturnValue(mock.proc as any);
     const progressCalls: string[] = [];
 
-    const promise = executeCommand('cmd', [], (newOutput) => {
+    const promise = executeCommand('cmd', [], {
+      onProgress: (newOutput) => {
       progressCalls.push(newOutput);
+      },
     });
 
     mock.emitStdout('chunk1');
@@ -116,21 +119,44 @@ describe('commandExecutor', () => {
     await expect(promise).rejects.toThrow('Failed to spawn command');
   });
 
-  it('rejects with timeout error when timeoutMs elapses', async () => {
+  it('rejects with timeout error when timeoutMs elapses and kills the process tree', async () => {
     vi.useFakeTimers();
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
     try {
       const mock = createMockProcess();
-      // Add kill mock to the process
-      (mock.proc as any).kill = vi.fn();
       vi.mocked(spawn).mockReturnValue(mock.proc as any);
 
-      const promise = executeCommand('slow', [], undefined, 5000);
+      const promise = executeCommand('slow', [], {
+        timeoutMs: 5000,
+        killGraceMs: 250,
+      });
       vi.advanceTimersByTime(5000);
 
       await expect(promise).rejects.toThrow('Command timed out after 5000ms');
-      expect((mock.proc as any).kill).toHaveBeenCalledWith('SIGTERM');
+      expect(processKill).toHaveBeenCalledWith(-123, 'SIGTERM');
+
+      vi.advanceTimersByTime(250);
+      expect(processKill).toHaveBeenCalledWith(-123, 'SIGKILL');
     } finally {
+      processKill.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  it('rejects with cancellation error when aborted and kills the process tree', async () => {
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      const mock = createMockProcess();
+      vi.mocked(spawn).mockReturnValue(mock.proc as any);
+
+      const controller = new AbortController();
+      const promise = executeCommand('slow', [], { signal: controller.signal });
+      controller.abort();
+
+      await expect(promise).rejects.toThrow('Command cancelled');
+      expect(processKill).toHaveBeenCalledWith(-123, 'SIGTERM');
+    } finally {
+      processKill.mockRestore();
     }
   });
 
@@ -161,19 +187,36 @@ describe('commandExecutor', () => {
     vi.useFakeTimers();
     try {
       const mock = createMockProcess();
-      (mock.proc as any).kill = vi.fn();
+      const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
       vi.mocked(spawn).mockReturnValue(mock.proc as any);
 
-      const promise = executeCommand('fast', [], undefined, 30000);
+      const promise = executeCommand('fast', [], { timeoutMs: 30000 });
       mock.emitStdout('done');
       mock.emitClose(0);
 
       const result = await promise;
       expect(result).toBe('done');
       // Process should not have been killed
-      expect((mock.proc as any).kill).not.toHaveBeenCalled();
+      expect(processKill).not.toHaveBeenCalled();
+      processKill.mockRestore();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('rejects immediately when stderr reports RESOURCE_EXHAUSTED', async () => {
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      const mock = createMockProcess();
+      vi.mocked(spawn).mockReturnValue(mock.proc as any);
+
+      const promise = executeCommand('gemini', ['prompt'], {});
+      mock.emitStderr('RESOURCE_EXHAUSTED: quota exceeded');
+
+      await expect(promise).rejects.toThrow('quota exhaustion');
+      expect(processKill).toHaveBeenCalledWith(-123, 'SIGTERM');
+    } finally {
+      processKill.mockRestore();
     }
   });
 });

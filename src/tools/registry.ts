@@ -2,6 +2,7 @@ import { Tool, Prompt } from "@modelcontextprotocol/sdk/types.js"; // Each tool 
 
 import { ToolArguments } from "../constants.js";
 import { z, ZodError } from "zod";
+import { ToolExecutionContext, ToolTimeoutClass } from "../execution.js";
 
 export interface UnifiedTool {
   name: string;
@@ -17,13 +18,18 @@ export interface UnifiedTool {
     }>;
   };
   
-  execute: (args: ToolArguments, onProgress?: (newOutput: string) => void) => Promise<string>;
+  execute: (args: ToolArguments, context?: ToolExecutionContext) => Promise<string>;
   category?: 'gemini' | 'codex' | 'claude' | 'opencode' | 'utility';
+  execution?: Tool['execution'];
+  timeoutClass?: ToolTimeoutClass;
 }
 
 export const toolRegistry: UnifiedTool[] = [];
 export function toolExists(toolName: string): boolean {
   return toolRegistry.some(t => t.name === toolName);
+}
+export function getTool(toolName: string): UnifiedTool | undefined {
+  return toolRegistry.find(t => t.name === toolName);
 }
 export function getToolDefinitions(subset?: UnifiedTool[]): Tool[] { // get Tool definitions from registry
   return (subset ?? toolRegistry).map(tool => {
@@ -46,6 +52,7 @@ export function getToolDefinitions(subset?: UnifiedTool[]): Tool[] { // get Tool
       name: tool.name,
       description: tool.description,
       inputSchema,
+      ...(tool.execution && { execution: tool.execution }),
       ...(annotations && { annotations }),
     };
   });
@@ -73,15 +80,14 @@ export function getPromptDefinitions(subset?: UnifiedTool[]): Prompt[] { // Help
     }));
 }
 
-export async function executeTool(toolName: string, args: ToolArguments, onProgress?: (newOutput: string) => void): Promise<string> {
-  const tool = toolRegistry.find(t => t.name === toolName);
+export function validateToolArguments(toolName: string, args: ToolArguments): ToolArguments {
+  const tool = getTool(toolName);
   if (!tool) {
     throw new Error(`Unknown tool: ${toolName}`);
   }
 
   try {
-    const validatedArgs = tool.zodSchema.parse(args) as ToolArguments;
-    return tool.execute(validatedArgs, onProgress);
+    return tool.zodSchema.parse(args) as ToolArguments;
   } catch (error) {
     if (error instanceof ZodError) {
       const issues = error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join(', ');
@@ -89,6 +95,28 @@ export async function executeTool(toolName: string, args: ToolArguments, onProgr
     }
     throw error;
   }
+}
+
+export async function executeValidatedTool(
+  tool: UnifiedTool,
+  args: ToolArguments,
+  context?: ToolExecutionContext,
+): Promise<string> {
+  return tool.execute(args, context);
+}
+
+export async function executeTool(
+  toolName: string,
+  args: ToolArguments,
+  context?: ToolExecutionContext,
+): Promise<string> {
+  const tool = getTool(toolName);
+  if (!tool) {
+    throw new Error(`Unknown tool: ${toolName}`);
+  }
+
+  const validatedArgs = validateToolArguments(toolName, args);
+  return executeValidatedTool(tool, validatedArgs, context);
 }
 
 export function getPromptMessage(toolName: string, args: Record<string, any>): string {

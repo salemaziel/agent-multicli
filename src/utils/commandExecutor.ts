@@ -1,7 +1,33 @@
 import { spawn } from "child_process";
+import { ToolExecutionContext } from "../execution.js";
 
 // Detect Windows platform for shell compatibility
 const isWindows = process.platform === "win32";
+
+export type CommandExecutionFailureKind =
+  | "cancelled"
+  | "timeout"
+  | "spawn"
+  | "quota"
+  | "failed"
+  | "no-output";
+
+export class CommandExecutionError extends Error {
+  constructor(
+    public readonly kind: CommandExecutionFailureKind,
+    message: string,
+    public readonly details: {
+      command: string;
+      args: string[];
+      exitCode?: number | null;
+      stdout?: string;
+      stderr?: string;
+    },
+  ) {
+    super(message);
+    this.name = "CommandExecutionError";
+  }
+}
 
 /**
  * Format a single argument for safe use with cmd.exe (shell: true on Windows).
@@ -43,12 +69,42 @@ export function sanitizeArgForCmd(arg: string): string {
   }
 }
 
+function terminateWindowsProcessTree(pid: number, force: boolean) {
+  const killArgs = ["/pid", String(pid), "/T"];
+  if (force) {
+    killArgs.push("/F");
+  }
+
+  const killer = spawn("taskkill", killArgs, {
+    stdio: ["ignore", "ignore", "ignore"],
+    shell: false,
+  });
+
+  killer.on("error", () => {
+    // Best effort cleanup only.
+  });
+}
+
+function terminateChildProcess(pid: number, force: boolean) {
+  if (isWindows) {
+    terminateWindowsProcessTree(pid, force);
+    return;
+  }
+
+  try {
+    process.kill(-pid, force ? "SIGKILL" : "SIGTERM");
+  } catch {
+    // Best effort cleanup only.
+  }
+}
+
 export async function executeCommand(
   command: string,
   args: string[],
-  onProgress?: (newOutput: string) => void,
-  timeoutMs?: number,
+  options: ToolExecutionContext = {},
 ): Promise<string> {
+  const { onProgress, signal, timeoutMs, killGraceMs = 5000 } = options;
+
   return new Promise((resolve, reject) => {
     // Use shell: true on Windows to properly execute .cmd files and resolve PATH.
     // Sanitize args to prevent cmd.exe metacharacter injection.
@@ -57,26 +113,83 @@ export async function executeCommand(
       env: process.env,
       shell: isWindows,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: !isWindows,
     });
 
     let stdout = "";
     let stderr = "";
-    let isResolved = false;
+    let isSettled = false;
     let lastReportedLength = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    let terminationStarted = false;
+
+    const clearRequestTimer = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    const clearTerminationTimer = () => {
+      if (forceKillTimeoutId) {
+        clearTimeout(forceKillTimeoutId);
+      }
+    };
+
+    const abortListener = () => {
+      beginTermination(
+        new CommandExecutionError(
+          "cancelled",
+          "Command cancelled",
+          { command, args, stdout, stderr },
+        ),
+      );
+    };
+
+    const settle = (error?: Error, output?: string) => {
+      if (isSettled) return;
+
+      isSettled = true;
+      clearRequestTimer();
+      signal?.removeEventListener("abort", abortListener);
+
+      if (error) {
+        reject(error);
+      } else {
+        resolve(output ?? "");
+      }
+    };
+
+    const beginTermination = (error: Error) => {
+      if (!terminationStarted && childProcess.pid) {
+        terminationStarted = true;
+        terminateChildProcess(childProcess.pid, false);
+        forceKillTimeoutId = setTimeout(() => {
+          if (childProcess.pid) {
+            terminateChildProcess(childProcess.pid, true);
+          }
+        }, killGraceMs);
+      }
+
+      settle(error);
+    };
+
+    signal?.addEventListener("abort", abortListener, { once: true });
 
     if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        if (!isResolved) {
-          isResolved = true;
-          childProcess.kill('SIGTERM');
-          reject(new Error(`Command timed out after ${timeoutMs}ms`));
-        }
+      timeoutId = setTimeout(() => {
+        beginTermination(
+          new CommandExecutionError(
+            "timeout",
+            `Command timed out after ${timeoutMs}ms`,
+            { command, args, stdout, stderr },
+          ),
+        );
       }, timeoutMs);
     }
 
-    childProcess.stdout.on("data", (data) => {
-      if (isResolved) return;
+    childProcess.stdout?.on("data", (data) => {
+      if (isSettled) return;
       stdout += data.toString();
 
       // Report new content if callback provided
@@ -89,41 +202,68 @@ export async function executeCommand(
 
 
     // CLI level errors
-    childProcess.stderr.on("data", (data) => {
-      if (isResolved) return;
+    childProcess.stderr?.on("data", (data) => {
+      if (isSettled) return;
       stderr += data.toString();
-      // find RESOURCE_EXHAUSTED when gemini quota is exceeded
+
       if (stderr.includes("RESOURCE_EXHAUSTED")) {
-        // Quota error details are captured in stderr and propagated via reject
+        beginTermination(
+          new CommandExecutionError(
+            "quota",
+            `Command failed due to quota exhaustion: ${stderr.trim()}`,
+            { command, args, stdout, stderr },
+          ),
+        );
       }
     });
     childProcess.on("error", (error) => {
-      if (!isResolved) {
-        isResolved = true;
-        if (timer) clearTimeout(timer);
-        reject(new Error(`Failed to spawn command: ${error.message}`));
+      if (!isSettled) {
+        clearRequestTimer();
+        clearTerminationTimer();
+        signal?.removeEventListener("abort", abortListener);
+        settle(
+          new CommandExecutionError(
+            "spawn",
+            `Failed to spawn command: ${error.message}`,
+            { command, args, stdout, stderr },
+          ),
+        );
       }
     });
     childProcess.on("close", (code) => {
-      if (!isResolved) {
-        isResolved = true;
-        if (timer) clearTimeout(timer);
-        if (code === 0) {
-          const output = stdout.trim();
-          if (output || !stderr.trim()) {
-            resolve(output);
-          } else {
-            // Some CLIs (e.g. OpenCode) exit 0 but write errors only to stderr.
-            // Surface the error instead of silently returning an empty string.
-            reject(new Error(`Command produced no output. stderr: ${stderr.trim()}`));
-          }
-        } else {
-          const errorMessage = stderr.trim() || "Unknown error";
-          reject(
-            new Error(`Command failed with exit code ${code}: ${errorMessage}`),
-          );
-        }
+      clearRequestTimer();
+      clearTerminationTimer();
+      signal?.removeEventListener("abort", abortListener);
+
+      if (isSettled) {
+        return;
       }
+
+      if (code === 0) {
+        const output = stdout.trim();
+        if (output || !stderr.trim()) {
+          settle(undefined, output);
+          return;
+        }
+
+        settle(
+          new CommandExecutionError(
+            "no-output",
+            `Command produced no output. stderr: ${stderr.trim()}`,
+            { command, args, exitCode: code, stdout, stderr },
+          ),
+        );
+        return;
+      }
+
+      const errorMessage = stderr.trim() || "Unknown error";
+      settle(
+        new CommandExecutionError(
+          stderr.includes("RESOURCE_EXHAUSTED") ? "quota" : "failed",
+          `Command failed with exit code ${code}: ${errorMessage}`,
+          { command, args, exitCode: code, stdout, stderr },
+        ),
+      );
     });
   });
 }

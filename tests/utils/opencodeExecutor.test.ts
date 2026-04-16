@@ -29,12 +29,12 @@ describe('opencodeExecutor', () => {
     vi.mocked(executeCommand).mockResolvedValue('done');
     const onProgress = vi.fn();
 
-    await executeOpencodeCLI('test prompt', 'opencode/gpt-5-nano', onProgress);
+    await executeOpencodeCLI('test prompt', 'opencode/gpt-5-nano', { onProgress });
 
     expect(executeCommand).toHaveBeenCalledWith(
       'opencode',
       ['run', 'test prompt', '-m', 'opencode/gpt-5-nano'],
-      onProgress,
+      { onProgress },
     );
   });
 

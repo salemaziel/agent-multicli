@@ -7,6 +7,7 @@ import {
   getPromptDefinitions,
   getPromptMessage,
   executeTool,
+  validateToolArguments,
 } from '../src/tools/registry.js';
 import type { UnifiedTool } from '../src/tools/registry.js';
 import type { ToolArguments } from '../src/constants.js';
@@ -21,6 +22,7 @@ function makeTool(overrides: Partial<UnifiedTool> = {}): UnifiedTool {
     execute: overrides.execute ?? vi.fn().mockResolvedValue('result'),
     category: overrides.category ?? 'utility',
     prompt: overrides.prompt,
+    execution: overrides.execution,
   };
 }
 
@@ -69,6 +71,17 @@ describe('registry', () => {
       expect(defs[0].inputSchema.type).toBe('object');
       expect(defs[0].inputSchema.properties).toHaveProperty('prompt');
       expect(defs[0].inputSchema.properties).toHaveProperty('model');
+    });
+
+    it('includes execution metadata when present', () => {
+      const tool = makeTool({
+        name: 'Ask-Claude',
+        execution: { taskSupport: 'optional' },
+      });
+      toolRegistry.push(tool);
+
+      const defs = getToolDefinitions();
+      expect(defs[0].execution).toEqual({ taskSupport: 'optional' });
     });
 
     it('adds openWorldHint annotation to Ask-* tools', () => {
@@ -207,16 +220,36 @@ describe('registry', () => {
     });
 
     it('passes onProgress callback through to execute', async () => {
-      const executeFn = vi.fn().mockImplementation(async (_args, onProgress) => {
-        onProgress?.('update');
+      const executeFn = vi.fn().mockImplementation(async (_args, context) => {
+        context?.onProgress?.('update');
         return 'done';
       });
       const tool = makeTool({ name: 'Progress Tool', execute: executeFn });
       toolRegistry.push(tool);
 
       const onProgress = vi.fn();
-      await executeTool('Progress Tool', { prompt: 'test' } as ToolArguments, onProgress);
+      await executeTool('Progress Tool', { prompt: 'test' } as ToolArguments, {
+        onProgress,
+      });
       expect(onProgress).toHaveBeenCalledWith('update');
+    });
+
+    it('exposes validated arguments without executing the tool', () => {
+      const tool = makeTool({
+        name: 'Validated',
+        zodSchema: z.object({
+          prompt: z.string(),
+          model: z.string(),
+        }),
+      });
+      toolRegistry.push(tool);
+
+      const validated = validateToolArguments('Validated', {
+        prompt: 'hello',
+        model: 'x',
+      } as ToolArguments);
+
+      expect(validated).toEqual({ prompt: 'hello', model: 'x' });
     });
   });
 

@@ -1,5 +1,6 @@
 import { executeCommand } from './commandExecutor.js';
 import { CLI } from '../constants.js';
+import { ToolExecutionContext } from '../execution.js';
 
 export async function executeClaudeCLI(
   prompt: string,
@@ -7,7 +8,7 @@ export async function executeClaudeCLI(
   permissionMode?: string,
   maxBudgetUsd?: number,
   systemPrompt?: string,
-  onProgress?: (newOutput: string) => void
+  context?: ToolExecutionContext,
 ): Promise<string> {
   const args: string[] = [
     CLI.CLAUDE_FLAGS.PRINT,
@@ -28,5 +29,5 @@ export async function executeClaudeCLI(
     args.push(CLI.CLAUDE_FLAGS.SYSTEM_PROMPT, systemPrompt);
   }
 
-  return executeCommand(CLI.COMMANDS.CLAUDE, args, onProgress);
+  return executeCommand(CLI.COMMANDS.CLAUDE, args, context);
 }
