@@ -67,12 +67,12 @@ describe('geminiExecutor', () => {
 
   it('passes onProgress callback through', async () => {
     const onProgress = vi.fn();
-    await executeGeminiCLI('task', 'gemini-2.5-pro', false, false, onProgress);
+    await executeGeminiCLI('task', 'gemini-2.5-pro', false, false, { onProgress });
 
     expect(executeCommand).toHaveBeenCalledWith(
       'gemini',
       expect.any(Array),
-      onProgress
+      { onProgress }
     );
   });
 });

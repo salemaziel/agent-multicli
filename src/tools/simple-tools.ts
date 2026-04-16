@@ -14,9 +14,8 @@ export const geminiHelpTool: UnifiedTool = {
     description: "Receive help information from the Gemini CLI",
   },
   category: 'gemini',
-  execute: async (args, onProgress) => {
-    return executeCommand("gemini", ["-help"], onProgress);
-  }
+  timeoutClass: 'help',
+  execute: async (_args, context) => executeCommand("gemini", ["-help"], context),
 };
 
 export const codexHelpTool: UnifiedTool = {
@@ -27,9 +26,8 @@ export const codexHelpTool: UnifiedTool = {
     description: "Receive help information from the Codex CLI",
   },
   category: 'codex',
-  execute: async (args, onProgress) => {
-    return executeCommand("codex", ["--help"], onProgress);
-  }
+  timeoutClass: 'help',
+  execute: async (_args, context) => executeCommand("codex", ["--help"], context),
 };
 
 export const claudeHelpTool: UnifiedTool = {
@@ -40,9 +38,8 @@ export const claudeHelpTool: UnifiedTool = {
     description: "Receive help information from the Claude Code CLI",
   },
   category: 'claude',
-  execute: async (args, onProgress) => {
-    return executeCommand("claude", ["--help"], onProgress);
-  }
+  timeoutClass: 'help',
+  execute: async (_args, context) => executeCommand("claude", ["--help"], context),
 };
 
 const noArgsSchema = z.object({});
@@ -94,9 +91,8 @@ export const opencodeHelpTool: UnifiedTool = {
     description: "Receive help information from the OpenCode CLI",
   },
   category: 'opencode',
-  execute: async (args, onProgress) => {
-    return executeCommand("opencode", ["--help"], onProgress);
-  }
+  timeoutClass: 'help',
+  execute: async (_args, context) => executeCommand("opencode", ["--help"], context),
 };
 
 export const opencodeListModelsTool: UnifiedTool = {
@@ -111,4 +107,3 @@ export const opencodeListModelsTool: UnifiedTool = {
     return getOpencodeClassifiedCatalog();
   }
 };
-

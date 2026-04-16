@@ -1,12 +1,13 @@
 import { executeCommand } from './commandExecutor.js';
 import { CLI } from '../constants.js';
+import { ToolExecutionContext } from '../execution.js';
 
 export async function executeCodexCLI(
   prompt: string,
   model: string,
   sandbox?: string,
   approvalPolicy?: string,
-  onProgress?: (newOutput: string) => void
+  context?: ToolExecutionContext,
 ): Promise<string> {
   const args: string[] = [
     CLI.SUBCOMMANDS.EXEC, prompt,
@@ -24,5 +25,5 @@ export async function executeCodexCLI(
     args.push(CLI.CODEX_FLAGS.APPROVAL, approvalPolicy);
   }
 
-  return executeCommand(CLI.COMMANDS.CODEX, args, onProgress);
+  return executeCommand(CLI.COMMANDS.CODEX, args, context);
 }

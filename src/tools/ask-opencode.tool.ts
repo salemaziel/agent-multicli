@@ -16,7 +16,9 @@ export const askOpencodeTool: UnifiedTool = {
     description: "Execute 'opencode run <prompt> -m <model>' to get OpenCode's response.",
   },
   category: 'opencode',
-  execute: async (args, onProgress) => {
+  execution: { taskSupport: 'optional' },
+  timeoutClass: 'ask',
+  execute: async (args, context) => {
     const { prompt, model } = args;
 
     if (!prompt?.trim()) {
@@ -26,7 +28,7 @@ export const askOpencodeTool: UnifiedTool = {
     const result = await executeOpencodeCLI(
       prompt as string,
       model as string,
-      onProgress
+      context
     );
 
     return `${STATUS_MESSAGES.OPENCODE_RESPONSE}\n${result}`;

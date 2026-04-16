@@ -202,6 +202,16 @@ Once connected, your AI client gains access to tools for the *other* CLIs (never
 
 ---
 
+## Task-Capable Ask Tools
+
+The `Ask-*` tools still work as normal synchronous MCP tools, but they now also advertise optional task-based execution for MCP clients that support tasks.
+
+- Task-capable clients can run long `Ask-*` calls using MCP tasks to avoid long blocking tool requests
+- Older clients keep using the same `Ask-*` tools synchronously with no config changes
+- `List-*`, `*-Help`, and `Fetch-Chunk` remain normal synchronous tools
+
+---
+
 ## Usage Examples
 
 Once installed, just talk naturally to your AI:
@@ -254,6 +264,15 @@ If only your own CLI is installed, Multi-CLI hides it (no self-calls). Install a
 1. Check that Node.js >= 20 is installed
 2. Run `npx @osanoai/multicli@latest` directly to see if it starts
 3. Restart your AI client completely
+
+**Need to tune timeouts or cleanup behavior?**
+Multi-CLI supports these optional environment variables:
+
+- `MULTICLI_ASK_TIMEOUT_MS`
+- `MULTICLI_HELP_TIMEOUT_MS`
+- `MULTICLI_CLI_DETECT_TIMEOUT_MS`
+- `MULTICLI_KILL_GRACE_MS`
+- `MULTICLI_LOG_LEVEL` (`error`, `info`, or `debug`)
 
 ---
 

@@ -1,5 +1,6 @@
 import { executeCommand } from './commandExecutor.js';
 import { CLI } from '../constants.js';
+import { ToolExecutionContext } from '../execution.js';
 
 import { parseChangeModeOutput, validateChangeModeEdits } from './changeModeParser.js';
 import { formatChangeModeResponse, summarizeChangeModeEdits } from './changeModeTranslator.js';
@@ -11,7 +12,7 @@ export async function executeGeminiCLI(
   model: string,
   sandbox?: boolean,
   changeMode?: boolean,
-  onProgress?: (newOutput: string) => void
+  context?: ToolExecutionContext,
 ): Promise<string> {
   let prompt_processed = prompt;
   
@@ -87,7 +88,7 @@ ${prompt_processed}
   }
   args.push(prompt_processed);
 
-  return executeCommand(CLI.COMMANDS.GEMINI, args, onProgress);
+  return executeCommand(CLI.COMMANDS.GEMINI, args, context);
 }
 
 export async function processChangeModeOutput(

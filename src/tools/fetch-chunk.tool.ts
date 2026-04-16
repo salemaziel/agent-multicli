@@ -27,7 +27,7 @@ export const fetchChunkTool: UnifiedTool = {
   
   category: 'gemini',
   
-  execute: async (args: any, onProgress?: (newOutput: string) => void): Promise<string> => {
+  execute: async (args: any): Promise<string> => {
     const { cacheKey, chunkIndex } = args;
     
     // Retrieve cached chunks

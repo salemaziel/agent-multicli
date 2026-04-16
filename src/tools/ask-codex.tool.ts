@@ -18,7 +18,9 @@ export const askCodexTool: UnifiedTool = {
     description: "Execute 'codex exec <prompt> --full-auto' to get Codex's response.",
   },
   category: 'codex',
-  execute: async (args, onProgress) => {
+  execution: { taskSupport: 'optional' },
+  timeoutClass: 'ask',
+  execute: async (args, context) => {
     const { prompt, model, sandbox, approvalPolicy } = args;
 
     if (!prompt?.trim()) {
@@ -30,7 +32,7 @@ export const askCodexTool: UnifiedTool = {
       model as string,
       sandbox as string | undefined,
       approvalPolicy as string | undefined,
-      onProgress
+      context
     );
 
     return `${STATUS_MESSAGES.CODEX_RESPONSE}\n${result}`;
