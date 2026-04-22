@@ -1,12 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { spawn } from 'child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
 }));
 
 import { executeCommand, sanitizeArgForCmd } from '../../src/utils/commandExecutor.js';
+import { createLogger } from '../../src/logger.js';
 
 function createMockProcess() {
   const proc = {
@@ -218,6 +222,66 @@ describe('commandExecutor', () => {
     } finally {
       processKill.mockRestore();
     }
+  });
+
+  it('logs subprocess lifecycle events and full command args', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'multicli-command-'));
+    try {
+      const logPath = path.join(dir, 'multicli.log');
+      const logger = createLogger({
+        filePath: logPath,
+        fileLevel: 'debug',
+        stderrLevel: 'silent',
+        bindings: { component: 'testCommand' },
+      });
+      const mock = createMockProcess();
+      vi.mocked(spawn).mockReturnValue(mock.proc as any);
+
+      const promise = executeCommand('claude', ['--print', 'FULL PROMPT BODY'], {
+        logger,
+      });
+      mock.emitStdout('tool output');
+      mock.emitClose(0);
+
+      await promise;
+
+      const logContents = readFileSync(logPath, 'utf8');
+      expect(logContents).toContain('command_spawn_requested');
+      expect(logContents).toContain('command_stdout_chunk');
+      expect(logContents).toContain('FULL PROMPT BODY');
+      expect(logContents).toContain('tool output');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes cwd and env overrides through to spawn', async () => {
+    const mock = createMockProcess();
+    vi.mocked(spawn).mockReturnValue(mock.proc as any);
+
+    const promise = executeCommand('claude', ['--help'], {
+      cwd: '/tmp/project-root',
+      env: {
+        PATH: '/custom/bin',
+        MULTICLI_SERVICE: '1',
+      },
+    });
+    mock.emitStdout('help output');
+    mock.emitClose(0);
+
+    await promise;
+
+    expect(spawn).toHaveBeenCalledWith(
+      'claude',
+      ['--help'],
+      expect.objectContaining({
+        cwd: '/tmp/project-root',
+        env: {
+          PATH: '/custom/bin',
+          MULTICLI_SERVICE: '1',
+        },
+      }),
+    );
   });
 });
 

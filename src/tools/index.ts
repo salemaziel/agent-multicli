@@ -11,14 +11,20 @@ import { askClaudeTool } from './ask-claude.tool.js';
 import { askOpencodeTool } from './ask-opencode.tool.js';
 import { detectAvailableClis, CliAvailability } from '../utils/cliDetector.js';
 import { MultiCliConfig } from '../config.js';
+import type { Logger } from '../logger.js';
 
 /**
  * Initialize the tool registry based on which CLIs are available.
  * Must be called (and awaited) before the server starts accepting requests.
  */
-export async function initTools(config?: Pick<MultiCliConfig, 'cliDetectTimeoutMs'>): Promise<CliAvailability> {
+export async function initTools(
+  config?: Pick<MultiCliConfig, 'cliDetectTimeoutMs'> & { logger?: Logger },
+): Promise<CliAvailability> {
   toolRegistry.length = 0;
-  const availability = await detectAvailableClis(config?.cliDetectTimeoutMs);
+  const availability = await detectAvailableClis(
+    config?.cliDetectTimeoutMs,
+    config?.logger,
+  );
 
   if (availability.gemini) {
     toolRegistry.push(
@@ -52,6 +58,11 @@ export async function initTools(config?: Pick<MultiCliConfig, 'cliDetectTimeoutM
       opencodeHelpTool,       // OpenCode-Help
     );
   }
+
+  config?.logger?.info('tool_registry_initialized', {
+    availability,
+    toolNames: toolRegistry.map((tool) => tool.name),
+  });
 
   return availability;
 }

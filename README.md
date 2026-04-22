@@ -18,13 +18,17 @@ OpenCode: "I checked with three providers. They all agree with Codex."
 
 ---
 
-## One-Line Install
+## One-Line Install (macOS / Linux)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/osanoai/multicli/main/install.sh | bash
 ```
 
-Detects which AI CLIs you have installed and configures Multi-CLI for all of them automatically. No config files, no API keys, no environment variables. If it's on your PATH, it works.
+Detects which AI CLIs you have installed and configures Multi-CLI for them automatically.
+
+- Claude Code is configured to use a per-user local HTTP service on `127.0.0.1`
+- Gemini CLI, Codex CLI, and OpenCode keep using stdio/local config by default
+- The installer may update client config files on your behalf
 
 ---
 
@@ -47,7 +51,7 @@ This tool was built by the very AIs it connects.
 
 Claude, Gemini, Codex, and OpenCode wrote the code. Claude, Gemini, Codex, and OpenCode maintain it. Every night, a CI job queries the latest stable release of each CLI for its current model list, diffs the results against what's in the repo, and automatically publishes a new version if anything changed. New model releases get picked up within 24 hours. Deprecated models get cleaned out. The repo stays current without anyone touching it.
 
-Because all install commands use `@latest`, your MCP client pulls the newest version every time it starts — no manual updates, no stale model lists, no maintenance.
+The stdio install paths use `@latest`, so those clients pick up new releases automatically. Claude Code's managed HTTP service intentionally runs from a stable installed runtime instead of a transient `npx` cache; rerun the installer or `multicli service refresh --configure-claude` after upgrading.
 
 Most MCP tools go stale within weeks. This one is self-maintaining by design.
 
@@ -55,7 +59,7 @@ Most MCP tools go stale within weeks. This one is self-maintaining by design.
 
 ## Prerequisites
 
-You need **Node.js >= 20** and at least **two** of these CLIs installed:
+You need **Node.js >= 20** and at least **one** of these CLIs installed:
 
 | CLI | Install |
 |-----|---------|
@@ -64,7 +68,7 @@ You need **Node.js >= 20** and at least **two** of these CLIs installed:
 | [Codex CLI](https://github.com/openai/codex) | `npm install -g @openai/codex` |
 | [OpenCode](https://opencode.ai) | `curl -fsSL https://opencode.ai/install | bash` |
 
-> Why two? Because one AI talking to itself is a monologue, not a collaboration.
+> Multi-CLI is most useful with two or more CLIs installed. With only one, the install still works, but there may be nothing to bridge yet.
 
 ---
 
@@ -73,6 +77,35 @@ You need **Node.js >= 20** and at least **two** of these CLIs installed:
 Prefer to install per-client yourself? Each command is one line.
 
 ### Claude Code
+
+Recommended for Claude Code stability:
+
+```bash
+npm install -g @osanoai/multicli
+multicli service install --configure-claude
+```
+
+This installs a per-user background service that listens only on `127.0.0.1`, configures Claude Code to use Multi-CLI over HTTP, and keeps the underlying server alive even if Claude drops a stdio subprocess.
+
+The managed service installs as a per-user login/background service:
+
+- macOS: `launchd` LaunchAgent
+- Ubuntu/Debian: `systemd --user`
+- Windows: Scheduled Task at user logon
+
+Security model:
+
+- Listens only on `127.0.0.1`
+- Uses `Authorization: Bearer <token>` for every HTTP MCP request
+- Stores generated service artifacts in a user-owned service directory
+
+Operational notes:
+
+- `multicli service install` refuses transient `npx` runtimes; use a global install or a stable local checkout
+- Generated service state includes an env file you can edit if your local AI CLIs require additional credentials or PATH entries
+- On Linux, the default `systemd --user` service follows your login session; enable `linger` yourself only if you intentionally want it to stay up after logout
+
+Legacy stdio installation is still available:
 
 ```bash
 claude mcp add --scope user Multi-CLI -- npx -y @osanoai/multicli@latest
@@ -172,11 +205,21 @@ If the file already exists, merge the `"Multi-CLI"` entry into the existing `"mc
 
 ### Any Other MCP Client
 
-Multi-CLI uses standard stdio transport. If your client supports MCP, point it at:
+Multi-CLI supports both stdio and Streamable HTTP.
+
+For stdio-capable clients, point them at:
 
 ```
 npx -y @osanoai/multicli@latest
 ```
+
+For a managed local HTTP service, install Multi-CLI globally and run:
+
+```bash
+multicli service install
+```
+
+The service listens on `127.0.0.1` only and exposes `/mcp` plus `/health`.
 
 ---
 
@@ -247,6 +290,15 @@ Or get a second opinion on anything:
 5. Results flow back through MCP to your AI client
 ```
 
+For Claude Code, Multi-CLI can also run as a local background HTTP service:
+
+```
+┌─────────────┐     MCP (HTTP)       ┌──────────────┐     CLI calls    ┌─────────────┐
+│ Claude Code │ ◄──────────────────► │  Multi-CLI   │ ───────────────► │ Other AIs   │
+│   Client    │    127.0.0.1 only    │   service    │                  │ (CLI tools) │
+└─────────────┘                      └──────────────┘                  └─────────────┘
+```
+
 ---
 
 ## Troubleshooting
@@ -262,17 +314,48 @@ If only your own CLI is installed, Multi-CLI hides it (no self-calls). Install a
 
 **MCP server not responding?**
 1. Check that Node.js >= 20 is installed
-2. Run `npx @osanoai/multicli@latest` directly to see if it starts
+2. Run `npx -y @osanoai/multicli@latest` directly to see if the stdio server starts
 3. Restart your AI client completely
+
+**Claude Code disconnecting after successful calls?**
+Use the managed background service instead of the legacy stdio integration:
+
+```bash
+npm install -g @osanoai/multicli
+multicli service install --configure-claude
+multicli service doctor
+```
+
+Helpful service commands:
+
+- `multicli service status`
+- `multicli service doctor`
+- `multicli service logs`
+- `multicli service refresh`
+- `multicli service uninstall`
 
 **Need to tune timeouts or cleanup behavior?**
 Multi-CLI supports these optional environment variables:
 
+- `MULTICLI_TRANSPORT` (`stdio` or `http`)
 - `MULTICLI_ASK_TIMEOUT_MS`
 - `MULTICLI_HELP_TIMEOUT_MS`
 - `MULTICLI_CLI_DETECT_TIMEOUT_MS`
 - `MULTICLI_KILL_GRACE_MS`
-- `MULTICLI_LOG_LEVEL` (`error`, `info`, or `debug`)
+- `MULTICLI_HTTP_HOST` (defaults to `127.0.0.1`)
+- `MULTICLI_HTTP_PORT` (defaults to `37420`)
+- `MULTICLI_HTTP_PATH` (defaults to `/mcp`)
+- `MULTICLI_HTTP_AUTH_TOKEN` (required for direct HTTP mode)
+- `MULTICLI_HTTP_SESSION_IDLE_MS`
+- `MULTICLI_LOG_PATH` (defaults to `~/.multicli/logs/multicli.log`)
+- `MULTICLI_LOG_LEVEL` (`error`, `info`, or `debug`; defaults to `debug` for the file log)
+- `MULTICLI_STDERR_LOG_LEVEL` (`silent`, `error`, `info`, or `debug`; defaults to `error`)
+- `MULTICLI_SERVICE_ROOT_DIR`
+- `MULTICLI_SERVICE_LOG_PATH`
+- `MULTICLI_SERVICE_ENV_PATH`
+- `MULTICLI_SERVICE_RUNTIME_PATH`
+
+The server writes structured JSON-line logs to a single file destination, rotates them automatically for long-running service mode, and includes full prompt bodies for `Ask-*` requests so disconnects and crashes can be reconstructed after the fact.
 
 ---
 

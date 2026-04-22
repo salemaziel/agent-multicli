@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { CLI } from "../constants.js";
+import type { Logger } from "../logger.js";
 
 const isWindows = process.platform === "win32";
 
@@ -8,10 +9,19 @@ const isWindows = process.platform === "win32";
  * Uses `which` on Unix/macOS, `where` on Windows.
  * Always resolves to a boolean — never rejects.
  */
-export async function commandExists(command: string, timeoutMs?: number): Promise<boolean> {
+export async function commandExists(
+  command: string,
+  timeoutMs?: number,
+  logger?: Logger,
+): Promise<boolean> {
   return new Promise((resolve) => {
     try {
       const checker = isWindows ? "where" : "which";
+      logger?.debug('cli_probe_started', {
+        command,
+        checker,
+        timeoutMs,
+      });
       const child = spawn(checker, [command], {
         stdio: ["ignore", "ignore", "ignore"],
         shell: isWindows,
@@ -27,20 +37,40 @@ export async function commandExists(command: string, timeoutMs?: number): Promis
       if (timeoutMs && timeoutMs > 0) {
         timeoutId = setTimeout(() => {
           child.kill('SIGTERM');
+          logger?.error('cli_probe_timed_out', {
+            command,
+            checker,
+            timeoutMs,
+          });
           resolve(false);
         }, timeoutMs);
       }
 
-      child.on("error", () => {
+      child.on("error", (error) => {
         cleanup();
+        logger?.error('cli_probe_spawn_failed', {
+          command,
+          checker,
+          error,
+        });
         resolve(false);
       });
 
       child.on("close", (code) => {
         cleanup();
+        logger?.debug('cli_probe_finished', {
+          command,
+          checker,
+          exitCode: code,
+          exists: code === 0,
+        });
         resolve(code === 0);
       });
-    } catch {
+    } catch (error) {
+      logger?.error('cli_probe_threw', {
+        command,
+        error,
+      });
       resolve(false);
     }
   });
@@ -57,19 +87,27 @@ export interface CliAvailability {
  * Detect which of the four supported CLIs are available on the system.
  * Runs all four checks in parallel for speed.
  */
-export async function detectAvailableClis(timeoutMs?: number): Promise<CliAvailability> {
+export async function detectAvailableClis(
+  timeoutMs?: number,
+  logger?: Logger,
+): Promise<CliAvailability> {
   if (process.env.QA_NO_CLIS === 'true') {
+    logger?.info('cli_detection_skipped', {
+      reason: 'QA_NO_CLIS=true',
+    });
     return { gemini: false, codex: false, claude: false, opencode: false };
   }
 
+  logger?.info('cli_detection_started', { timeoutMs });
   const [gemini, codex, claude, opencode] = await Promise.all([
-    commandExists(CLI.COMMANDS.GEMINI, timeoutMs),
-    commandExists(CLI.COMMANDS.CODEX, timeoutMs),
-    commandExists(CLI.COMMANDS.CLAUDE, timeoutMs),
-    commandExists(CLI.COMMANDS.OPENCODE, timeoutMs),
+    commandExists(CLI.COMMANDS.GEMINI, timeoutMs, logger),
+    commandExists(CLI.COMMANDS.CODEX, timeoutMs, logger),
+    commandExists(CLI.COMMANDS.CLAUDE, timeoutMs, logger),
+    commandExists(CLI.COMMANDS.OPENCODE, timeoutMs, logger),
   ]);
 
   const availability: CliAvailability = { gemini, codex, claude, opencode };
+  logger?.info('cli_detection_finished', { availability });
 
   return availability;
 }
