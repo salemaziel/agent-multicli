@@ -20,6 +20,9 @@ describe('config', () => {
     );
     expect(config.serviceRootDir.toLowerCase()).toContain('multicli');
     expect(config.serviceEnvPath).toContain(config.serviceRootDir);
+    expect(config.serviceManifestPath).toBe(
+      path.join(config.serviceRootDir, 'manifest.json'),
+    );
   });
 
   it('allows log path and stderr level overrides from the environment', () => {
@@ -43,6 +46,7 @@ describe('config', () => {
       MULTICLI_HTTP_AUTH_TOKEN: 'secret-token',
       MULTICLI_HTTP_SESSION_IDLE_MS: '60000',
       MULTICLI_SERVICE_ROOT_DIR: '/tmp/multicli-service',
+      MULTICLI_SERVICE_MANIFEST_PATH: '/tmp/multicli-service/custom-manifest.json',
     });
 
     expect(config.transport).toBe('http');
@@ -53,5 +57,15 @@ describe('config', () => {
     expect(config.httpSessionIdleMs).toBe(60000);
     expect(config.serviceRootDir).toBe('/tmp/multicli-service');
     expect(config.serviceLogPath).toBe('/tmp/multicli-service/logs/service.log');
+    expect(config.serviceManifestPath).toBe('/tmp/multicli-service/custom-manifest.json');
+  });
+
+  it('accepts the legacy runtime-path env var as a manifest-path alias', () => {
+    const config = loadConfig({
+      MULTICLI_SERVICE_ROOT_DIR: '/tmp/multicli-service',
+      MULTICLI_SERVICE_RUNTIME_PATH: '/tmp/multicli-service/legacy-manifest.json',
+    });
+
+    expect(config.serviceManifestPath).toBe('/tmp/multicli-service/legacy-manifest.json');
   });
 });

@@ -1,9 +1,13 @@
 import {
+  closeSync,
   chmodSync,
   existsSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -25,7 +29,6 @@ import {
   SERVICE_LABEL,
   SYSTEMD_UNIT_NAME,
   WINDOWS_TASK_NAME,
-  getServiceKind,
 } from './paths.js';
 import type { ServiceManifest } from './types.js';
 
@@ -52,7 +55,7 @@ function writeTextFile(filePath: string, contents: string, mode?: number) {
 }
 
 function loadManifest(config: MultiCliConfig): ServiceManifest {
-  const manifestPath = path.join(config.serviceRootDir, 'manifest.json');
+  const manifestPath = config.serviceManifestPath;
   if (!existsSync(manifestPath)) {
     throw new Error(`Multi-CLI service is not installed. Missing manifest at ${manifestPath}`);
   }
@@ -249,7 +252,7 @@ async function installService(
   logger: Logger,
   options: ServiceInstallOptions,
 ): Promise<ServiceManifest> {
-  const existingToken = options.preserveToken && existsSync(path.join(config.serviceRootDir, 'manifest.json'))
+  const existingToken = options.preserveToken && existsSync(config.serviceManifestPath)
     ? loadManifest(config).transport.token
     : undefined;
   const token = config.httpAuthToken ?? existingToken ?? generateServiceToken();
@@ -292,8 +295,32 @@ function tailFile(filePath: string, lineCount = 200): string {
     return `Log file not found: ${filePath}`;
   }
 
-  const contents = readFileSync(filePath, 'utf8');
-  return contents.split('\n').slice(-lineCount).join('\n');
+  const fileDescriptor = openSync(filePath, 'r');
+
+  try {
+    const { size } = statSync(filePath);
+    if (size === 0) {
+      return '';
+    }
+
+    const chunkSize = 4096;
+    let position = size;
+    let contents = '';
+    let newlineCount = 0;
+
+    while (position > 0 && newlineCount <= lineCount) {
+      const bytesToRead = Math.min(chunkSize, position);
+      position -= bytesToRead;
+      const chunkBuffer = Buffer.alloc(bytesToRead);
+      readSync(fileDescriptor, chunkBuffer, 0, bytesToRead, position);
+      contents = chunkBuffer.toString('utf8') + contents;
+      newlineCount = contents.split('\n').length - 1;
+    }
+
+    return contents.split('\n').slice(-lineCount).join('\n');
+  } finally {
+    closeSync(fileDescriptor);
+  }
 }
 
 export async function handleServiceCommand(
@@ -384,7 +411,7 @@ export async function handleServiceCommand(
       const manifest = loadManifest(config);
       const status = await getServiceStatus(manifest, serviceLogger);
       const claudeConfig = await inspectClaudeConfig(manifest, serviceLogger);
-      let health = 'unreachable';
+      let health: string;
       try {
         const response = await fetch(manifest.transport.healthUrl);
         health = response.ok ? 'ok' : `http ${response.status}`;

@@ -114,7 +114,7 @@ export function buildServiceEnvFileContents(
     MULTICLI_SERVICE_ROOT_DIR: manifest.paths.root,
     MULTICLI_SERVICE_LOG_PATH: manifest.paths.logFile,
     MULTICLI_SERVICE_ENV_PATH: manifest.paths.envFile,
-    MULTICLI_SERVICE_RUNTIME_PATH: manifest.paths.manifest,
+    MULTICLI_SERVICE_MANIFEST_PATH: manifest.paths.manifest,
   };
 
   const envEntries: Record<string, string> = {};

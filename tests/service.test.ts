@@ -44,7 +44,7 @@ function createConfig(overrides: Partial<MultiCliConfig> = {}): MultiCliConfig {
     serviceRootDir,
     serviceLogPath: path.join(serviceRootDir, 'logs', 'service.log'),
     serviceEnvPath: path.join(serviceRootDir, 'env'),
-    serviceRuntimePath: path.join(serviceRootDir, 'runtime.json'),
+    serviceManifestPath: path.join(serviceRootDir, 'manifest.json'),
     ...overrides,
   };
 }
@@ -96,6 +96,8 @@ describe('service runtime', () => {
     expect(parsed.MULTICLI_TRANSPORT).toBe('http');
     expect(parsed.MULTICLI_HTTP_AUTH_TOKEN).toBe('token-value');
     expect(parsed.MULTICLI_LOG_PATH).toBe(manifest.paths.logFile);
+    expect(parsed.MULTICLI_SERVICE_MANIFEST_PATH).toBe(manifest.paths.manifest);
+    expect(parsed.MULTICLI_SERVICE_RUNTIME_PATH).toBeUndefined();
   });
 
   it('loads the JSON env file into process environment entries', () => {

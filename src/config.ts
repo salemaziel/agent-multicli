@@ -46,7 +46,7 @@ export interface MultiCliConfig {
   serviceRootDir: string;
   serviceLogPath: string;
   serviceEnvPath: string;
-  serviceRuntimePath: string;
+  serviceManifestPath: string;
 }
 
 const DEFAULTS: MultiCliConfig = {
@@ -70,7 +70,7 @@ const DEFAULTS: MultiCliConfig = {
   serviceRootDir: getDefaultServiceRootDir(),
   serviceLogPath: path.join(getDefaultServiceRootDir(), 'logs', 'service.log'),
   serviceEnvPath: path.join(getDefaultServiceRootDir(), 'env'),
-  serviceRuntimePath: path.join(getDefaultServiceRootDir(), 'runtime.json'),
+  serviceManifestPath: path.join(getDefaultServiceRootDir(), 'manifest.json'),
 };
 
 function parsePositiveInt(
@@ -191,9 +191,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MultiCliConfig
       env.MULTICLI_SERVICE_ENV_PATH,
       path.join(serviceRootDir, 'env'),
     ),
-    serviceRuntimePath: parseString(
-      env.MULTICLI_SERVICE_RUNTIME_PATH,
-      path.join(serviceRootDir, 'runtime.json'),
+    serviceManifestPath: parseString(
+      env.MULTICLI_SERVICE_MANIFEST_PATH ?? env.MULTICLI_SERVICE_RUNTIME_PATH,
+      path.join(serviceRootDir, 'manifest.json'),
     ),
   };
 }

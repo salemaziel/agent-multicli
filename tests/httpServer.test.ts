@@ -84,7 +84,7 @@ async function createHttpConfig(): Promise<MultiCliConfig> {
     serviceRootDir,
     serviceLogPath: path.join(serviceRootDir, 'logs', 'service.log'),
     serviceEnvPath: path.join(serviceRootDir, 'env'),
-    serviceRuntimePath: path.join(serviceRootDir, 'runtime.json'),
+    serviceManifestPath: path.join(serviceRootDir, 'manifest.json'),
   };
 }
 

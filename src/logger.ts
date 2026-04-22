@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { MultiCliLogLevel, MultiCliStderrLogLevel } from './config.js';
@@ -29,12 +29,19 @@ function serializeValue(
   seen = new WeakSet<object>(),
 ): unknown {
   if (value instanceof Error) {
-    return {
+    if (seen.has(value)) {
+      return '[Circular]';
+    }
+
+    seen.add(value);
+    const serialized = {
       name: value.name,
       message: value.message,
       stack: value.stack,
       cause: serializeValue(value.cause, seen),
     };
+    seen.delete(value);
+    return serialized;
   }
 
   if (typeof value === 'bigint') {
@@ -104,6 +111,7 @@ function rotateLogsIfNeeded(logPath: string) {
       return;
     }
 
+    rmSync(`${logPath}.${MAX_LOG_BACKUPS}`, { force: true });
     for (let index = MAX_LOG_BACKUPS - 1; index >= 1; index -= 1) {
       const currentPath = `${logPath}.${index}`;
       const nextPath = `${logPath}.${index + 1}`;

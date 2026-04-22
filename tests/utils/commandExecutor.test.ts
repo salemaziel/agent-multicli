@@ -224,7 +224,7 @@ describe('commandExecutor', () => {
     }
   });
 
-  it('logs subprocess lifecycle events and full command args', async () => {
+  it('logs subprocess lifecycle events while redacting sensitive command data', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'multicli-command-'));
     try {
       const logPath = path.join(dir, 'multicli.log');
@@ -237,10 +237,15 @@ describe('commandExecutor', () => {
       const mock = createMockProcess();
       vi.mocked(spawn).mockReturnValue(mock.proc as any);
 
-      const promise = executeCommand('claude', ['--print', 'FULL PROMPT BODY'], {
+      const promise = executeCommand('claude', [
+        '--print',
+        'FULL PROMPT BODY',
+        '--header',
+        'Authorization: Bearer SUPERSECRET',
+      ], {
         logger,
       });
-      mock.emitStdout('tool output');
+      mock.emitStdout('tool output\nAuthorization: Bearer LEAKED');
       mock.emitClose(0);
 
       await promise;
@@ -249,7 +254,10 @@ describe('commandExecutor', () => {
       expect(logContents).toContain('command_spawn_requested');
       expect(logContents).toContain('command_stdout_chunk');
       expect(logContents).toContain('FULL PROMPT BODY');
+      expect(logContents).toContain('Authorization: Bearer [Redacted]');
       expect(logContents).toContain('tool output');
+      expect(logContents).not.toContain('SUPERSECRET');
+      expect(logContents).not.toContain('LEAKED');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

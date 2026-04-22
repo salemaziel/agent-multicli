@@ -353,7 +353,7 @@ Multi-CLI supports these optional environment variables:
 - `MULTICLI_SERVICE_ROOT_DIR`
 - `MULTICLI_SERVICE_LOG_PATH`
 - `MULTICLI_SERVICE_ENV_PATH`
-- `MULTICLI_SERVICE_RUNTIME_PATH`
+- `MULTICLI_SERVICE_MANIFEST_PATH`
 
 The server writes structured JSON-line logs to a single file destination, rotates them automatically for long-running service mode, and includes full prompt bodies for `Ask-*` requests so disconnects and crashes can be reconstructed after the fact.
 

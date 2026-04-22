@@ -32,7 +32,7 @@ export function getServicePaths(
     case 'darwin':
       return {
         root,
-        manifest: path.join(root, 'manifest.json'),
+        manifest: config.serviceManifestPath,
         envFile: config.serviceEnvPath,
         launcher: path.join(root, 'Multi-CLI.sh'),
         serviceDefinition: path.join(
@@ -47,7 +47,7 @@ export function getServicePaths(
     case 'win32':
       return {
         root,
-        manifest: path.join(root, 'manifest.json'),
+        manifest: config.serviceManifestPath,
         envFile: config.serviceEnvPath,
         launcher: path.join(root, 'launcher.ps1'),
         serviceDefinition: path.join(root, 'task.xml'),
@@ -57,7 +57,7 @@ export function getServicePaths(
     default:
       return {
         root,
-        manifest: path.join(root, 'manifest.json'),
+        manifest: config.serviceManifestPath,
         envFile: config.serviceEnvPath,
         launcher: path.join(root, 'launcher.sh'),
         serviceDefinition: path.join(
