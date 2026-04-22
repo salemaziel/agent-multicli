@@ -1,6 +1,32 @@
+import os from 'node:os';
+import path from 'node:path';
+
 export type MultiCliLogLevel = 'error' | 'info' | 'debug';
+export type MultiCliStderrLogLevel = MultiCliLogLevel | 'silent';
+export type MultiCliTransport = 'stdio' | 'http';
+
+function getDefaultServiceRootDir(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  switch (platform) {
+    case 'darwin':
+      return path.join(os.homedir(), 'Library', 'Application Support', 'MultiCLI');
+    case 'win32':
+      return path.join(
+        env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'),
+        'MultiCLI',
+      );
+    default:
+      return path.join(
+        env.XDG_CONFIG_HOME ?? path.join(os.homedir(), '.config'),
+        'multicli',
+      );
+  }
+}
 
 export interface MultiCliConfig {
+  transport: MultiCliTransport;
   askTimeoutMs: number;
   helpTimeoutMs: number;
   cliDetectTimeoutMs: number;
@@ -9,10 +35,22 @@ export interface MultiCliConfig {
   taskPollIntervalMs: number;
   progressIdleHeartbeatMs: number;
   progressThrottleMs: number;
+  httpHost: string;
+  httpPort: number;
+  httpPath: string;
+  httpAuthToken?: string;
+  httpSessionIdleMs: number;
+  logPath: string;
   logLevel: MultiCliLogLevel;
+  stderrLogLevel: MultiCliStderrLogLevel;
+  serviceRootDir: string;
+  serviceLogPath: string;
+  serviceEnvPath: string;
+  serviceManifestPath: string;
 }
 
 const DEFAULTS: MultiCliConfig = {
+  transport: 'stdio',
   askTimeoutMs: 15 * 60 * 1000,
   helpTimeoutMs: 30 * 1000,
   cliDetectTimeoutMs: 5 * 1000,
@@ -21,7 +59,18 @@ const DEFAULTS: MultiCliConfig = {
   taskPollIntervalMs: 1000,
   progressIdleHeartbeatMs: 10 * 1000,
   progressThrottleMs: 1000,
-  logLevel: 'error',
+  httpHost: '127.0.0.1',
+  httpPort: 37420,
+  httpPath: '/mcp',
+  httpAuthToken: undefined,
+  httpSessionIdleMs: 30 * 60 * 1000,
+  logPath: path.join(os.homedir(), '.multicli', 'logs', 'multicli.log'),
+  logLevel: 'debug',
+  stderrLogLevel: 'error',
+  serviceRootDir: getDefaultServiceRootDir(),
+  serviceLogPath: path.join(getDefaultServiceRootDir(), 'logs', 'service.log'),
+  serviceEnvPath: path.join(getDefaultServiceRootDir(), 'env'),
+  serviceManifestPath: path.join(getDefaultServiceRootDir(), 'manifest.json'),
 };
 
 function parsePositiveInt(
@@ -52,8 +101,59 @@ function parseLogLevel(
   }
 }
 
+function parseTransport(
+  value: string | undefined,
+  fallback: MultiCliTransport,
+): MultiCliTransport {
+  switch (value) {
+    case 'stdio':
+    case 'http':
+      return value;
+    default:
+      return fallback;
+  }
+}
+
+function parseStderrLogLevel(
+  value: string | undefined,
+  fallback: MultiCliStderrLogLevel,
+): MultiCliStderrLogLevel {
+  switch (value) {
+    case 'error':
+    case 'info':
+    case 'debug':
+    case 'silent':
+      return value;
+    default:
+      return fallback;
+  }
+}
+
+function parseString(
+  value: string | undefined,
+  fallback: string,
+): string {
+  if (!value) {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+
+function normalizeHttpPath(value: string | undefined, fallback: string): string {
+  const parsed = parseString(value, fallback);
+  return parsed.startsWith('/') ? parsed : `/${parsed}`;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MultiCliConfig {
+  const serviceRootDir = parseString(
+    env.MULTICLI_SERVICE_ROOT_DIR,
+    DEFAULTS.serviceRootDir,
+  );
+
   return {
+    transport: parseTransport(env.MULTICLI_TRANSPORT, DEFAULTS.transport),
     askTimeoutMs: parsePositiveInt(env.MULTICLI_ASK_TIMEOUT_MS, DEFAULTS.askTimeoutMs),
     helpTimeoutMs: parsePositiveInt(env.MULTICLI_HELP_TIMEOUT_MS, DEFAULTS.helpTimeoutMs),
     cliDetectTimeoutMs: parsePositiveInt(env.MULTICLI_CLI_DETECT_TIMEOUT_MS, DEFAULTS.cliDetectTimeoutMs),
@@ -68,6 +168,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MultiCliConfig
       env.MULTICLI_PROGRESS_THROTTLE_MS,
       DEFAULTS.progressThrottleMs,
     ),
+    httpHost: parseString(env.MULTICLI_HTTP_HOST, DEFAULTS.httpHost),
+    httpPort: parsePositiveInt(env.MULTICLI_HTTP_PORT, DEFAULTS.httpPort),
+    httpPath: normalizeHttpPath(env.MULTICLI_HTTP_PATH, DEFAULTS.httpPath),
+    httpAuthToken: env.MULTICLI_HTTP_AUTH_TOKEN?.trim() || DEFAULTS.httpAuthToken,
+    httpSessionIdleMs: parsePositiveInt(
+      env.MULTICLI_HTTP_SESSION_IDLE_MS,
+      DEFAULTS.httpSessionIdleMs,
+    ),
+    logPath: parseString(env.MULTICLI_LOG_PATH, DEFAULTS.logPath),
     logLevel: parseLogLevel(env.MULTICLI_LOG_LEVEL, DEFAULTS.logLevel),
+    stderrLogLevel: parseStderrLogLevel(
+      env.MULTICLI_STDERR_LOG_LEVEL,
+      DEFAULTS.stderrLogLevel,
+    ),
+    serviceRootDir,
+    serviceLogPath: parseString(
+      env.MULTICLI_SERVICE_LOG_PATH,
+      path.join(serviceRootDir, 'logs', 'service.log'),
+    ),
+    serviceEnvPath: parseString(
+      env.MULTICLI_SERVICE_ENV_PATH,
+      path.join(serviceRootDir, 'env'),
+    ),
+    serviceManifestPath: parseString(
+      env.MULTICLI_SERVICE_MANIFEST_PATH ?? env.MULTICLI_SERVICE_RUNTIME_PATH,
+      path.join(serviceRootDir, 'manifest.json'),
+    ),
   };
 }

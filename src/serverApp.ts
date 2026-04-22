@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
@@ -20,6 +22,8 @@ import {
   type GetPromptResult,
   type CallToolResult,
   type CreateTaskResult,
+  type Implementation,
+  type ListRootsResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { PROTOCOL, ToolArguments } from "./constants.js";
 import { MultiCliConfig, loadConfig } from "./config.js";
@@ -40,12 +44,45 @@ import {
 import { importantReadNowTool } from './tools/important-read-now.tool.js';
 import { filterToolsForClient, isToolBlockedForClient } from './clientFilter.js';
 import { CommandExecutionError } from "./utils/commandExecutor.js";
+import type { CliAvailability } from "./utils/cliDetector.js";
 
 type HandlerExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 type ProgressToken = string | number | undefined;
 type TaskExecution = {
   controller: AbortController;
 };
+
+export interface MultiCliRuntime {
+  availability: CliAvailability;
+  initializedAt: string;
+}
+
+export interface MultiCliSessionContext {
+  cwd?: string;
+  rootUri?: string;
+  projectRoots?: ListRootsResult['roots'];
+  env?: NodeJS.ProcessEnv;
+  transport?: 'stdio' | 'http';
+  clientName?: string;
+  resolveWorkingDirectory?: (
+    server: Server,
+    logger: Logger,
+  ) => Promise<{
+    cwd?: string;
+    rootUri?: string;
+    projectRoots?: ListRootsResult['roots'];
+  }>;
+}
+
+export interface CreateServerAppOptions {
+  runtime?: MultiCliRuntime;
+  sessionContext?: MultiCliSessionContext;
+  onClientInitialized?: (
+    server: Server,
+    clientInfo: Implementation | undefined,
+    sessionContext: MultiCliSessionContext,
+  ) => Promise<void> | void;
+}
 
 function buildToolResult(text: string, isError: boolean): CallToolResult {
   return {
@@ -110,10 +147,71 @@ function getErrorMeta(error: unknown): Record<string, unknown> | undefined {
   }
 
   if (error instanceof Error) {
-    return { message: error.message };
+    return { error };
   }
 
   return undefined;
+}
+
+export async function createServerRuntime(
+  config: MultiCliConfig = loadConfig(),
+  rootLogger: Logger = createLogger({
+    filePath: config.logPath,
+    fileLevel: config.logLevel,
+    stderrLevel: config.stderrLogLevel,
+    bindings: { component: 'multicli' },
+  }),
+): Promise<MultiCliRuntime> {
+  const logger = rootLogger.child({ component: 'serverRuntime' });
+  logger.info('server_runtime_initializing', { config });
+
+  const availability = await initTools({
+    cliDetectTimeoutMs: config.cliDetectTimeoutMs,
+    logger: rootLogger.child({ component: 'cliDetector' }),
+  });
+
+  const runtime: MultiCliRuntime = {
+    availability,
+    initializedAt: new Date().toISOString(),
+  };
+
+  logger.info('server_runtime_initialized', { runtime });
+  return runtime;
+}
+
+export async function resolveWorkingDirectoryFromRoots(
+  server: Server,
+  logger: Logger,
+): Promise<{
+  cwd?: string;
+  rootUri?: string;
+  projectRoots?: ListRootsResult['roots'];
+}> {
+  try {
+    const rootsResult = await server.listRoots();
+    const projectRoots = rootsResult.roots;
+    const rootUri = rootsResult.roots.at(0)?.uri;
+    if (!rootUri) {
+      logger.info('session_roots_empty');
+      return { projectRoots };
+    }
+
+    if (!rootUri.startsWith('file://')) {
+      logger.error('session_root_uri_unsupported', { rootUri });
+      return { rootUri, projectRoots };
+    }
+
+    const cwd = fileURLToPath(rootUri);
+    logger.info('session_working_directory_resolved', {
+      cwd,
+      rootUri,
+      projectRoots,
+    });
+    return { cwd, rootUri, projectRoots };
+  } catch (error) {
+    logger.error('session_working_directory_resolution_failed', { error });
+    return {};
+  }
 }
 
 function createProgressReporter(
@@ -124,12 +222,29 @@ function createProgressReporter(
   operationName: string,
 ) {
   let completed = false;
+  let stopping = false;
   let timeout: NodeJS.Timeout | undefined;
   let progress = 0;
   let lastOutputAt = Date.now();
   let lastNotificationAt = 0;
   let latestPreview: string | undefined;
-  let flushInFlight = false;
+  let queuedWork: Promise<void> = Promise.resolve();
+
+  const queueProgressWork = (work: () => Promise<void>) => {
+    queuedWork = queuedWork.then(work, work);
+    return queuedWork;
+  };
+
+  const waitForQueuedWork = async () => {
+    try {
+      await queuedWork;
+    } catch (error) {
+      logger.debug('progress_work_failed', {
+        operationName,
+        error,
+      });
+    }
+  };
 
   const sendProgressNotification = async (
     currentProgress: number,
@@ -156,15 +271,15 @@ function createProgressReporter(
       });
       lastNotificationAt = Date.now();
     } catch (error) {
-      logger.debug('Progress notification failed', {
+      logger.debug('progress_notification_failed', {
         operationName,
         error,
       });
     }
   };
 
-  const flushPreview = async (force = false) => {
-    if (completed || !latestPreview || flushInFlight) {
+  const flushPreview = async (force = false, allowWhileStopping = false) => {
+    if (completed || (!allowWhileStopping && stopping) || !latestPreview) {
       return;
     }
 
@@ -172,47 +287,45 @@ function createProgressReporter(
       return;
     }
 
-    flushInFlight = true;
     const preview = latestPreview;
     latestPreview = undefined;
     progress += 1;
     await sendProgressNotification(progress, preview);
-    flushInFlight = false;
-
-    if (latestPreview && !completed) {
-      void flushPreview();
-    }
   };
 
   const scheduleHeartbeat = () => {
-    timeout = setTimeout(async () => {
-      if (completed) {
-        return;
-      }
+    timeout = setTimeout(() => {
+      void queueProgressWork(async () => {
+        if (completed || stopping) {
+          return;
+        }
 
-      if (latestPreview) {
-        await flushPreview(true);
-      } else if (Date.now() - lastOutputAt >= config.progressIdleHeartbeatMs) {
-        progress += 1;
-        await sendProgressNotification(
-          progress,
-          `Still running ${operationName}...`,
-        );
-      }
-
-      if (!completed) {
-        scheduleHeartbeat();
-      }
+        if (latestPreview) {
+          await flushPreview(true);
+        } else if (Date.now() - lastOutputAt >= config.progressIdleHeartbeatMs) {
+          progress += 1;
+          await sendProgressNotification(
+            progress,
+            `Still running ${operationName}...`,
+          );
+        }
+      }).finally(() => {
+        if (!completed && !stopping) {
+          scheduleHeartbeat();
+        }
+      });
     }, config.progressIdleHeartbeatMs);
   };
 
   return {
     start: async () => {
-      await sendProgressNotification(0, `Starting ${operationName}`);
+      await queueProgressWork(async () => {
+        await sendProgressNotification(0, `Starting ${operationName}`);
+      });
       scheduleHeartbeat();
     },
     onOutput: (chunk: string) => {
-      if (completed) {
+      if (completed || stopping) {
         return;
       }
 
@@ -224,26 +337,36 @@ function createProgressReporter(
 
       latestPreview = preview;
       if (Date.now() - lastNotificationAt >= config.progressThrottleMs) {
-        void flushPreview(true);
+        void queueProgressWork(async () => {
+          await flushPreview(true);
+        });
       }
     },
     stop: async (status: 'success' | 'failed' | 'cancelled') => {
-      if (latestPreview) {
-        await flushPreview(true);
+      if (stopping) {
+        await waitForQueuedWork();
+        return;
       }
 
-      completed = true;
+      stopping = true;
       if (timeout) {
         clearTimeout(timeout);
       }
 
-      if (status === 'success') {
-        await sendProgressNotification(100, `Completed ${operationName}`, 100);
-      } else if (status === 'cancelled') {
-        await sendProgressNotification(100, `Cancelled ${operationName}`, 100);
-      } else {
-        await sendProgressNotification(100, `Failed ${operationName}`, 100);
-      }
+      await queueProgressWork(async () => {
+        await flushPreview(true, true);
+        completed = true;
+
+        if (status === 'success') {
+          await sendProgressNotification(100, `Completed ${operationName}`, 100);
+        } else if (status === 'cancelled') {
+          await sendProgressNotification(100, `Cancelled ${operationName}`, 100);
+        } else {
+          await sendProgressNotification(100, `Failed ${operationName}`, 100);
+        }
+      });
+
+      await waitForQueuedWork();
     },
   };
 }
@@ -257,10 +380,24 @@ export interface MultiCliServerApp {
 
 export async function createServerApp(
   config: MultiCliConfig = loadConfig(),
+  rootLogger: Logger = createLogger({
+    filePath: config.logPath,
+    fileLevel: config.logLevel,
+    stderrLevel: config.stderrLogLevel,
+    bindings: { component: 'multicli' },
+  }),
+  options: CreateServerAppOptions = {},
 ): Promise<MultiCliServerApp> {
-  await initTools({ cliDetectTimeoutMs: config.cliDetectTimeoutMs });
+  const logger = rootLogger.child({ component: 'serverApp' });
+  const sessionContext = options.sessionContext ?? { transport: 'stdio', cwd: process.cwd() };
+  const runtime = options.runtime ?? await createServerRuntime(config, rootLogger);
 
-  const logger = createLogger(config.logLevel);
+  logger.info('server_app_initializing', {
+    config,
+    runtime,
+    sessionContext,
+  });
+
   const taskStore = new ManagedTaskStore();
   const activeTasks = new Map<string, TaskExecution>();
 
@@ -291,9 +428,52 @@ export async function createServerApp(
   let connectedClientName: string | undefined;
   let closed = false;
 
+  const resolveSessionExecutionContext = async (requestLogger: Logger): Promise<{
+    cwd?: string;
+    projectRoots?: ListRootsResult['roots'];
+  }> => {
+    if (sessionContext.cwd || sessionContext.projectRoots) {
+      return {
+        cwd: sessionContext.cwd,
+        projectRoots: sessionContext.projectRoots,
+      };
+    }
+
+    if (!sessionContext.resolveWorkingDirectory) {
+      return {
+        cwd: sessionContext.cwd,
+        projectRoots: sessionContext.projectRoots,
+      };
+    }
+
+    const result = await sessionContext.resolveWorkingDirectory(
+      server,
+      requestLogger.child({ component: 'workingDirectory' }),
+    );
+
+    if (result.cwd) {
+      sessionContext.cwd = result.cwd;
+    }
+    if (result.rootUri) {
+      sessionContext.rootUri = result.rootUri;
+    }
+    if (result.projectRoots) {
+      sessionContext.projectRoots = result.projectRoots;
+    }
+
+    return {
+      cwd: sessionContext.cwd,
+      projectRoots: sessionContext.projectRoots,
+    };
+  };
+
   const abortActiveTasks = (reason: string) => {
+    logger.info('active_task_abort_started', {
+      reason,
+      activeTaskCount: activeTasks.size,
+    });
     for (const [taskId, taskExecution] of activeTasks.entries()) {
-      logger.info('Aborting active task', { taskId, reason });
+      logger.info('active_task_aborting', { taskId, reason });
       taskExecution.controller.abort(new Error(reason));
     }
   };
@@ -301,17 +481,23 @@ export async function createServerApp(
   server.oninitialized = () => {
     const clientInfo = server.getClientVersion();
     connectedClientName = clientInfo?.name;
-    logger.info('Client initialized', {
-      clientName: connectedClientName,
+    sessionContext.clientName = connectedClientName;
+    logger.info('client_initialized', {
+      client: clientInfo,
+      transport: sessionContext.transport,
     });
+    void options.onClientInitialized?.(server, clientInfo, sessionContext);
   };
 
   server.onerror = (error) => {
-    logger.error('Server error', { error });
+    logger.error('server_error', { error });
   };
 
   server.onclose = () => {
-    logger.info('Server transport closed');
+    logger.info('server_transport_closed', {
+      connectedClientName,
+      activeTaskCount: activeTasks.size,
+    });
   };
 
   const executeToolRequest = async (
@@ -321,13 +507,24 @@ export async function createServerApp(
     extra: HandlerExtra,
     taskId?: string,
   ): Promise<string> => {
+    const requestLogger = logger.child({
+      component: 'toolExecution',
+      toolName,
+      requestId: extra.requestId,
+      ...(taskId ? { taskId } : {}),
+    });
+    const { cwd, projectRoots } = await resolveSessionExecutionContext(requestLogger);
     const executionContext: ToolExecutionContext = {
       signal: extra.signal,
       onProgress: (newOutput) => progressReporter.onOutput(newOutput),
       timeoutMs: getTimeoutForTool(toolName, config),
       killGraceMs: config.killGraceMs,
+      cwd,
+      projectRoots,
+      env: sessionContext.env,
       requestId: extra.requestId,
       taskId,
+      logger: requestLogger,
     };
 
     const tool = getTool(toolName);
@@ -340,6 +537,10 @@ export async function createServerApp(
 
   server.setRequestHandler(ListToolsRequestSchema, async (_request: ListToolsRequest): Promise<{ tools: Tool[] }> => {
     const visible = filterToolsForClient(toolRegistry, connectedClientName);
+    logger.debug('list_tools_requested', {
+      connectedClientName,
+      visibleToolNames: visible.map((tool) => tool.name),
+    });
     if (visible.length === 0) {
       return { tools: getToolDefinitions([importantReadNowTool]) as unknown as Tool[] };
     }
@@ -369,13 +570,19 @@ export async function createServerApp(
     const args: ToolArguments = (request.params.arguments as ToolArguments) || {};
     const validatedArgs = validateToolArguments(toolName, args);
     const progressToken = (request.params as { _meta?: { progressToken?: ProgressToken } })._meta?.progressToken;
-    const progressReporter = createProgressReporter(server, logger, config, progressToken, toolName);
-    const taskParams = (request.params as { task?: { ttl?: number | null; pollInterval?: number } }).task;
-
-    logger.info('Tool request started', {
+    const requestLogger = logger.child({
+      component: 'toolRequest',
       requestId: extra.requestId,
       toolName,
+    });
+    const progressReporter = createProgressReporter(server, requestLogger, config, progressToken, toolName);
+    const taskParams = (request.params as { task?: { ttl?: number | null; pollInterval?: number } }).task;
+
+    requestLogger.info('tool_request_started', {
       task: !!taskParams,
+      taskParams,
+      progressToken,
+      arguments: validatedArgs,
     });
 
     if (taskParams) {
@@ -401,22 +608,35 @@ export async function createServerApp(
       const controller = new AbortController();
       activeTasks.set(task.taskId, { controller });
       taskStore.registerCancelHandler(task.taskId, (reason) => {
-        logger.info('Task cancellation requested', {
+        requestLogger.info('task_cancellation_requested', {
           taskId: task.taskId,
-          toolName,
           reason,
         });
         controller.abort(new Error(reason ?? 'Task cancelled'));
       });
 
+      const taskLogger = requestLogger.child({
+        component: 'taskExecution',
+        taskId: task.taskId,
+      });
+      const { cwd, projectRoots } = await resolveSessionExecutionContext(taskLogger);
       const taskExecutionContext: ToolExecutionContext = {
         signal: controller.signal,
         onProgress: (newOutput) => progressReporter.onOutput(newOutput),
         timeoutMs: getTimeoutForTool(toolName, config),
         killGraceMs: config.killGraceMs,
+        cwd,
+        projectRoots,
+        env: sessionContext.env,
         requestId: extra.requestId,
         taskId: task.taskId,
+        logger: taskLogger,
       };
+
+      requestLogger.info('task_created', {
+        taskId: task.taskId,
+        taskParams,
+      });
 
       void (async () => {
         await progressReporter.start();
@@ -433,16 +653,15 @@ export async function createServerApp(
             buildToolResult(result, false),
           );
           await progressReporter.stop('success');
-          logger.info('Task completed', {
-            toolName,
+          taskLogger.info('task_completed', {
             taskId: task.taskId,
+            resultLength: result.length,
           });
         } catch (error) {
           const currentTask = await taskStore.getTask(task.taskId);
           if (currentTask?.status === 'cancelled' || controller.signal.aborted) {
             await progressReporter.stop('cancelled');
-            logger.info('Task cancelled', {
-              toolName,
+            taskLogger.info('task_cancelled', {
               taskId: task.taskId,
             });
           } else {
@@ -452,9 +671,7 @@ export async function createServerApp(
               buildErrorResult(toolName, error),
             );
             await progressReporter.stop('failed');
-            logger.error('Task failed', {
-              toolName,
-              taskId: task.taskId,
+            taskLogger.error('task_failed', {
               ...getErrorMeta(error),
             });
           }
@@ -463,8 +680,7 @@ export async function createServerApp(
           taskStore.clearCancelHandler(task.taskId);
         }
       })().catch((error) => {
-        logger.error('Unexpected task execution failure', {
-          toolName,
+        requestLogger.error('task_execution_unexpected_failure', {
           taskId: task.taskId,
           error,
         });
@@ -484,9 +700,8 @@ export async function createServerApp(
       );
 
       await progressReporter.stop('success');
-      logger.info('Tool request completed', {
-        requestId: extra.requestId,
-        toolName,
+      requestLogger.info('tool_request_completed', {
+        resultLength: result.length,
       });
 
       return buildToolResult(result, false);
@@ -496,9 +711,7 @@ export async function createServerApp(
         : 'failed';
       await progressReporter.stop(status);
 
-      logger.error('Tool request failed', {
-        requestId: extra.requestId,
-        toolName,
+      requestLogger.error('tool_request_failed', {
         ...getErrorMeta(error),
       });
 
@@ -508,6 +721,10 @@ export async function createServerApp(
 
   server.setRequestHandler(ListPromptsRequestSchema, async (_request: ListPromptsRequest): Promise<{ prompts: Prompt[] }> => {
     const visible = filterToolsForClient(toolRegistry, connectedClientName);
+    logger.debug('list_prompts_requested', {
+      connectedClientName,
+      visiblePromptNames: visible.filter((tool) => tool.prompt).map((tool) => tool.name),
+    });
     return { prompts: getPromptDefinitions(visible) as unknown as Prompt[] };
   });
 
@@ -525,6 +742,11 @@ export async function createServerApp(
       throw new Error(`Unknown prompt: ${promptName}`);
     }
 
+    logger.debug('get_prompt_requested', {
+      promptName,
+      arguments: args,
+    });
+
     return {
       messages: [{
         role: "user" as const,
@@ -540,38 +762,81 @@ export async function createServerApp(
     server,
     config,
     async connect(transport: Transport) {
+      logger.info('server_connect_started', {
+        transport: transport.constructor.name,
+      });
       await server.connect(transport);
+      logger.info('server_connect_completed', {
+        transport: transport.constructor.name,
+      });
     },
     async close(reason = 'Server shutting down') {
       if (closed) {
+        logger.debug('server_close_ignored', { reason });
         return;
       }
 
       closed = true;
+      logger.info('server_close_started', {
+        reason,
+        activeTaskCount: activeTasks.size,
+      });
       abortActiveTasks(reason);
       taskStore.cleanup();
       await server.close();
+      logger.info('server_close_completed', { reason });
     },
   };
 }
 
 export async function startServer(
   config: MultiCliConfig = loadConfig(),
+  rootLogger: Logger = createLogger({
+    filePath: config.logPath,
+    fileLevel: config.logLevel,
+    stderrLevel: config.stderrLogLevel,
+    bindings: { component: 'multicli' },
+  }),
 ): Promise<MultiCliServerApp> {
-  const logger = createLogger(config.logLevel);
-  const app = await createServerApp(config);
+  const logger = rootLogger.child({ component: 'startServer' });
+  logger.info('stdio_server_starting', { config });
+  const runtime = await createServerRuntime(config, rootLogger);
+  const app = await createServerApp(config, rootLogger, {
+    runtime,
+    sessionContext: {
+      transport: 'stdio',
+      cwd: process.cwd(),
+    },
+    onClientInitialized: async (server, _clientInfo, sessionContext) => {
+      const resolved = await resolveWorkingDirectoryFromRoots(
+        server,
+        rootLogger.child({ component: 'stdioSession' }),
+      );
+      sessionContext.cwd = resolved.cwd ?? sessionContext.cwd;
+      sessionContext.rootUri = resolved.rootUri;
+      sessionContext.projectRoots = resolved.projectRoots;
+    },
+  });
   const transport = new StdioServerTransport();
 
   process.stdin.once('end', () => {
-    logger.info('stdin ended; closing server');
+    logger.info('stdin_ended');
     void app.close('stdin ended');
   });
 
   process.stdin.once('close', () => {
-    logger.info('stdin closed; closing server');
+    logger.info('stdin_closed');
     void app.close('stdin closed');
   });
 
+  process.stdin.once('error', (error) => {
+    logger.error('stdin_error', { error });
+    void app.close('stdin error');
+  });
+
   await app.connect(transport);
+  logger.info('stdio_server_started', {
+    transport: transport.constructor.name,
+  });
   return app;
 }

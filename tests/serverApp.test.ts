@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 vi.mock('../src/utils/cliDetector.js', () => ({
   detectAvailableClis: vi.fn(),
@@ -20,6 +23,7 @@ import { executeCommand, CommandExecutionError } from '../src/utils/commandExecu
 import { createServerApp } from '../src/serverApp.js';
 import type { MultiCliServerApp } from '../src/serverApp.js';
 import type { MultiCliConfig } from '../src/config.js';
+import type { CreateServerAppOptions } from '../src/serverApp.js';
 
 const TEST_CONFIG: MultiCliConfig = {
   askTimeoutMs: 1000,
@@ -30,10 +34,12 @@ const TEST_CONFIG: MultiCliConfig = {
   taskPollIntervalMs: 5,
   progressIdleHeartbeatMs: 25,
   progressThrottleMs: 1,
-  logLevel: 'error',
+  logPath: path.join(os.tmpdir(), `multicli-server-app-${process.pid}.log`),
+  logLevel: 'debug',
+  stderrLogLevel: 'silent',
 };
 
-async function createConnectedPair() {
+async function createConnectedPair(options?: CreateServerAppOptions) {
   vi.mocked(detectAvailableClis).mockResolvedValue({
     gemini: false,
     codex: false,
@@ -41,7 +47,7 @@ async function createConnectedPair() {
     opencode: false,
   });
 
-  const app = await createServerApp(TEST_CONFIG);
+  const app = await createServerApp(TEST_CONFIG, undefined, options);
   const client = new Client(
     { name: 'integration-test-client', version: '1.0.0' },
     {
@@ -69,6 +75,7 @@ describe('serverApp', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    rmSync(TEST_CONFIG.logPath, { force: true });
   });
 
   afterEach(async () => {
@@ -140,6 +147,54 @@ describe('serverApp', () => {
         String(progress.message).includes('second line'),
       ),
     ).toBe(true);
+  });
+
+  it('drains in-flight progress notifications before returning the tool result', async () => {
+    ({ app, client } = await createConnectedPair());
+    vi.mocked(executeCommand).mockImplementation(async (_command, _args, options) => {
+      options?.onProgress?.('first line\nsecond line');
+      return 'done';
+    });
+
+    const originalNotification = app.server.notification.bind(app.server);
+    const clientError = vi.fn();
+    const progressMessages: string[] = [];
+
+    client.onerror = clientError;
+    app.server.notification = vi.fn(async (...args: Parameters<typeof app.server.notification>) => {
+      const [notification, options] = args;
+      if (notification.method === 'notifications/progress') {
+        const message = String(
+          (notification.params as { message?: string } | undefined)?.message ?? '',
+        );
+        progressMessages.push(message);
+
+        if (message.includes('second line')) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+      }
+
+      return originalNotification(notification, options);
+    });
+
+    const result = await client.callTool(
+      {
+        name: 'Ask-Claude',
+        arguments: {
+          prompt: 'hello',
+          model: 'claude-sonnet-4-6',
+        },
+      },
+      CallToolResultSchema,
+      { onprogress: vi.fn() },
+    );
+
+    expect(result.isError).toBe(false);
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(progressMessages.some(message => message.includes('second line'))).toBe(true);
+    expect(progressMessages).toContain('Completed Ask-Claude');
+    expect(clientError).not.toHaveBeenCalled();
   });
 
   it('propagates client cancellation to the running sync subprocess', async () => {
@@ -251,5 +306,57 @@ describe('serverApp', () => {
     expect(aborted).toBe(true);
 
     await iterator.return?.();
+  });
+
+  it('logs full prompt bodies for tool requests', async () => {
+    ({ app, client } = await createConnectedPair());
+    vi.mocked(executeCommand).mockResolvedValue('logged response');
+
+    await client.callTool(
+      {
+        name: 'Ask-Claude',
+        arguments: {
+          prompt: 'TRACE_THIS_FULL_PROMPT_BODY',
+          model: 'claude-sonnet-4-6',
+        },
+      },
+      CallToolResultSchema,
+    );
+
+    const logContents = readFileSync(TEST_CONFIG.logPath, 'utf8');
+    expect(logContents).toContain('TRACE_THIS_FULL_PROMPT_BODY');
+    expect(logContents).toContain('tool_request_started');
+  });
+
+  it('resolves session working directory before tool execution', async () => {
+    ({ app, client } = await createConnectedPair({
+      sessionContext: {
+        transport: 'http',
+        resolveWorkingDirectory: vi.fn().mockResolvedValue({
+          cwd: '/tmp/http-project',
+          projectRoots: [{ uri: 'file:///tmp/http-project' }],
+        }),
+      },
+    }));
+    vi.mocked(executeCommand).mockResolvedValue('resolved response');
+
+    await client.callTool(
+      {
+        name: 'Ask-Claude',
+        arguments: {
+          prompt: 'hello',
+          model: 'claude-sonnet-4-6',
+        },
+      },
+      CallToolResultSchema,
+    );
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      'claude',
+      expect.any(Array),
+      expect.objectContaining({
+        cwd: '/tmp/http-project',
+      }),
+    );
   });
 });

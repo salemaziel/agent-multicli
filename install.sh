@@ -11,6 +11,9 @@ RESET='\033[0m'
 
 PACKAGE="@osanoai/multicli@latest"
 SERVER_NAME="Multi-CLI"
+GLOBAL_PACKAGE="@osanoai/multicli@latest"
+GLOBAL_MULTICLI_ENTRY=""
+GLOBAL_INSTALL_READY=false
 
 echo ""
 echo -e "${CYAN}${BOLD}  Multi-CLI MCP Installer${RESET}"
@@ -27,6 +30,36 @@ command -v claude   &>/dev/null && CLAUDE_FOUND=true
 command -v gemini   &>/dev/null && GEMINI_FOUND=true
 command -v codex    &>/dev/null && CODEX_FOUND=true
 command -v opencode &>/dev/null && OPENCODE_FOUND=true
+
+install_global_multicli() {
+  if $GLOBAL_INSTALL_READY; then
+    return 0
+  fi
+
+  if ! command -v npm &>/dev/null; then
+    echo -e "${YELLOW}  npm is required to install the managed Claude Code service.${RESET}"
+    return 1
+  fi
+
+  echo -e "  ${CYAN}→ Installing stable Multi-CLI runtime for Claude Code...${RESET}"
+  if ! npm install -g "$GLOBAL_PACKAGE" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local npm_root
+  npm_root="$(npm root -g 2>/dev/null || true)"
+  if [ -z "$npm_root" ]; then
+    return 1
+  fi
+
+  GLOBAL_MULTICLI_ENTRY="$npm_root/@osanoai/multicli/dist/index.js"
+  if [ ! -f "$GLOBAL_MULTICLI_ENTRY" ]; then
+    return 1
+  fi
+
+  GLOBAL_INSTALL_READY=true
+  return 0
+}
 
 FOUND_COUNT=0
 $CLAUDE_FOUND   && ((FOUND_COUNT++)) || true
@@ -55,7 +88,7 @@ FAILED=()
 
 if $CLAUDE_FOUND; then
   echo -e "  ${CYAN}→ Installing for Claude Code...${RESET}"
-  if claude mcp add --scope user "$SERVER_NAME" -- npx -y "$PACKAGE" 2>/dev/null; then
+  if install_global_multicli && node "$GLOBAL_MULTICLI_ENTRY" service install --configure-claude >/dev/null 2>&1; then
     INSTALLED+=("Claude Code")
   else
     FAILED+=("Claude Code")
@@ -120,6 +153,12 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
   for cli in "${FAILED[@]}"; do
     echo -e "  ${YELLOW}• $cli${RESET}"
   done
+  if [[ " ${FAILED[*]} " == *" Claude Code "* ]]; then
+    echo ""
+    echo "  Claude Code manual fallback:"
+    echo "    npm install -g @osanoai/multicli"
+    echo "    multicli service install --configure-claude"
+  fi
   echo ""
 fi
 
@@ -137,7 +176,7 @@ if [ "$FOUND_COUNT" -eq 1 ]; then
   echo ""
   echo -e "${YELLOW}${BOLD}  ⚠  Warning: only one AI CLI detected.${RESET}"
   echo -e "${YELLOW}  Multi-CLI is a collaboration tool — it bridges multiple AIs together.${RESET}"
-  echo -e "${YELLOW}  With only ${INSTALLED[0]} installed, there's nothing to bridge to.${RESET}"
+  echo -e "${YELLOW}  With only ${INSTALLED[0]} installed, there may be nothing to bridge to yet.${RESET}"
   echo ""
   echo "  Install at least one more CLI to unlock cross-model collaboration:"
   $CLAUDE_FOUND   || echo "    • Claude Code  →  npm install -g @anthropic-ai/claude-code"
@@ -154,6 +193,6 @@ else
   done
   echo ""
   echo -e "  Restart your AI client and the cross-model tools will appear automatically."
-  echo -e "  No config. No API keys. No setup. Just works."
+  echo -e "  Claude Code now uses the managed local HTTP service; other detected clients keep their stdio/local configuration."
   echo ""
 fi

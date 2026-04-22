@@ -47,18 +47,21 @@
     "README.md"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.3.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",
-    "@vitest/coverage-v8": "^4.0.18",
+    "@vitest/coverage-v8": "^4.1.5",
     "husky": "^9.1.7",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.5"
   },
   "overrides": {
+    "@hono/node-server": "^1.19.14",
+    "hono": "^4.12.14",
+    "path-to-regexp": "^8.4.2",
     "picomatch": "^4.0.4"
   },
   "publishConfig": {
